@@ -3820,10 +3820,19 @@ canvas.addEventListener('mouseup', (e) => {
         const wy = (my - canvas.height/2) / camera.zoom + camera.y;
         const angle = Math.atan2(wy - player.y, wx - player.x);
         const isIron = arrowType === 'iron_arrow';
-        const speed = isIron ? 18 : 12;
-        const maxDist = isIron ? 900 : 550;
-        const damage = isIron ? 18 : 8;
+        // Сила натяжения: 0.0..1.0 (полный заряд за 700мс)
+        const chargeRatio = Math.min(1, (performance.now() - _bowChargeStart) / 700);
+        // Минимум 30% при отпускании без заряда, максимум 100%
+        const chargeMult = 0.3 + chargeRatio * 0.7;
+        const baseSpeed = isIron ? 18 : 12;
+        const baseDamage = isIron ? 18 : 8;
+        const baseMaxDist = isIron ? 900 : 550;
+        const speed = baseSpeed * chargeMult;
+        const damage = Math.round(baseDamage * chargeMult);
+        const maxDist = baseMaxDist * chargeMult;
         _playSound('hit_wood'); // use existing sound as bow twang
+        // Показать урон при выстреле
+        hitHints.push({text: '🏹 ' + damage, x: player.x, y: player.y - 40, life: 50, color: chargeRatio > 0.8 ? '#ff5722' : chargeRatio > 0.4 ? '#ffc107' : '#e0e0e0'});
         arrows.push({
             x: player.x, y: player.y,
             vx: Math.cos(angle) * speed,
@@ -6336,11 +6345,20 @@ function loop(timestamp) {
     if(_bowCharging && inventory[player.activeSlot].type === 'bow') {
         const angle = Math.atan2(mouse.y - player.y, mouse.x - player.x);
         const isIron = inventory.some(s => s.type === 'iron_arrow');
-        const aimDist = isIron ? 900 : 550;
+        const _aimChargeR = Math.min(1, (performance.now() - _bowChargeStart) / 700);
+        const _aimMult = 0.3 + _aimChargeR * 0.7;
+        const aimDist = (isIron ? 900 : 550) * _aimMult;
+        // Цвет прицела: белый → жёлтый → красный по заряду
+        const _aimAlpha = 0.4 + _aimChargeR * 0.5;
+        const _aimColor = _aimChargeR > 0.8
+            ? `rgba(255,87,34,${_aimAlpha})`
+            : _aimChargeR > 0.4
+            ? `rgba(255,220,50,${_aimAlpha})`
+            : `rgba(200,200,200,${_aimAlpha})`;
         ctx.save();
         ctx.setLineDash([6, 8]);
-        ctx.strokeStyle = 'rgba(255, 220, 50, 0.6)';
-        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = _aimColor;
+        ctx.lineWidth = 1.5 + _aimChargeR;
         ctx.beginPath();
         ctx.moveTo(player.x, player.y);
         ctx.lineTo(player.x + Math.cos(angle)*aimDist*0.3, player.y + Math.sin(angle)*aimDist*0.3);
@@ -6476,6 +6494,14 @@ function loop(timestamp) {
             const p = (swingT - 0.65) / 0.35;
             const ease = p * (2 - p);
             angle = STRIKE + (REST - STRIKE) * ease;
+        }
+
+        // Лук: рука следует за мышью во время натяжения
+        if(inHand === 'bow' && _bowCharging) {
+            // Угол мыши в мировых координатах → локальные координаты игрока
+            const _mouseAngleWorld = Math.atan2(mouse.y - player.y, mouse.x - player.x);
+            // facing=1: угол как есть; facing=-1: зеркалим по X (π - angle)
+            angle = player.facing === 1 ? _mouseAngleWorld : Math.PI - _mouseAngleWorld;
         }
 
         // Позиция конца рукояти (где держит игрок)
@@ -6618,6 +6644,9 @@ function loop(timestamp) {
             // Зарядка лука: если заряжается — натянуть тетиву
             const chargeT = _bowCharging ? Math.min(1, (performance.now() - _bowChargeStart) / 700) : 0;
             const pull = chargeT * 7; // максимальный отгиб тетивы
+
+            // Поворот лука горизонтально
+            ctx.rotate(-Math.PI / 2);
 
             // Дуга лука (деревянная часть)
             ctx.strokeStyle = '#6d4c41'; ctx.lineWidth = 4; ctx.lineCap = 'round';
